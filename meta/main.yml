@@ -1,0 +1,12 @@
+#SPDX-License-Identifier: MIT-0
+galaxy_info:
+  role_name: ipa_cert_expiry_exporter
+  author: Ibrahim Musayev
+  description: Export FreeIPA certificate expiration timestamps to Prometheus
+  license: MIT
+  min_ansible_version: "2.9"
+  platforms:
+    - name: EL
+      versions: ['8', '9']
+    - name: Debian
+      versions: ['11', '12']

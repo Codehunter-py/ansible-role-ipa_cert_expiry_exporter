@@ -1,0 +1,7 @@
+#SPDX-License-Identifier: MIT-0
+---
+# defaults file for ipa_cert_expiry_exporter
+script_path: /usr/local/bin/ipa_cert_expiry.sh
+metrics_out_path: /var/lib/node_exporter/ipa_cert_expiration.prom
+timer_interval_minutes: 15   # interval in minutes, simple integer
+export_user: node-exp

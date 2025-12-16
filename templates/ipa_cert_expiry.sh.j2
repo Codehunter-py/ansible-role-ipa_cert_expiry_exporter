@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+
+OUT="{{ metrics_out_path }}"  # Change this to your actual path
+TMP="$(mktemp)"
+
+# Enable debug mode
+DEBUG=0
+
+debug_log() {
+    if [[ "$DEBUG" == "1" ]]; then
+        echo "DEBUG: $1" >&2
+    fi
+}
+
+# Function to check if certificate was recently renewed
+check_cert_renewal() {
+    local cert_file="$1"
+    local request_id="$2"
+    
+    debug_log "Checking renewal for cert_file='$cert_file', request_id='$request_id'"
+    
+    if [ -f "$cert_file" ]; then
+        debug_log "Certificate file exists: $cert_file"
+        
+        # Get certificate modification time
+        local cert_mtime=$(stat -c %Y "$cert_file" 2>/dev/null || echo "0")
+        local current_time=$(date +%s)
+        local hours_since_modified=$(( (current_time - cert_mtime) / 3600 ))
+        
+        debug_log "cert_mtime=$cert_mtime, current_time=$current_time, hours_since_modified=$hours_since_modified"
+        
+        echo "ipa_cert_file_age_hours{request_id=\"$request_id\",cert_file=\"$cert_file\"} $hours_since_modified" >>"$TMP"
+        debug_log "Added age metric: ipa_cert_file_age_hours{request_id=\"$request_id\",cert_file=\"$cert_file\"} $hours_since_modified"
+        
+        # Flag for recently renewed certificates (modified within last 24 hours)
+        local recently_renewed=0
+        if [ $hours_since_modified -lt 24 ]; then
+            recently_renewed=1
+            debug_log "Certificate was recently renewed (< 24 hours ago)"
+        else
+            debug_log "Certificate was NOT recently renewed (>= 24 hours ago)"
+        fi
+        
+        echo "ipa_cert_recently_renewed{request_id=\"$request_id\",cert_file=\"$cert_file\"} $recently_renewed" >>"$TMP"
+        debug_log "Added renewal metric: ipa_cert_recently_renewed{request_id=\"$request_id\",cert_file=\"$cert_file\"} $recently_renewed"
+    else
+        debug_log "Certificate file does NOT exist: $cert_file"
+    fi
+}
+
+# Function to get certificate file path from request ID
+get_cert_file_path() {
+    local request_id="$1"
+    debug_log "Getting cert file path for request_id: $request_id"
+    
+    local cert_file=$(ipa-getcert list -i "$request_id" 2>/dev/null | awk '/^[[:space:]]*certificate:.*location=/ {
+        # Find the location= part
+        match($0, /location='\''([^'\'']+)'\''/, arr)
+        if (arr[1] != "") {
+            print arr[1]
+            exit
+        }
+        # Fallback for different quote styles
+        match($0, /location=([^,[:space:]]+)/, arr)
+        if (arr[1] != "") {
+            gsub(/^'\''|'\''$/, "", arr[1])
+            print arr[1]
+            exit
+        }
+    }')
+    
+    debug_log "Found cert file path: '$cert_file'"
+    echo "$cert_file"
+}
+
+debug_log "=== Starting IPA Certificate Monitoring Script ==="
+
+# 1. grab every certmonger request id
+debug_log "Getting request IDs..."
+request_ids=$(ipa-getcert list 2>/dev/null | awk -F"'" '/Request ID/ {print $2}')
+debug_log "Found request IDs: $request_ids"
+
+# 2. build metrics
+: >"$TMP" # truncate temp file
+debug_log "Building metrics, temp file: $TMP"
+
+for id in $request_ids; do
+    debug_log "--- Processing request ID: $id ---"
+    
+    # Get expiration timestamp (existing functionality)
+    exp_line=$(ipa-getcert list -i "$id" | sed -n 's/^[[:space:]]*expires:[[:space:]]*//p')
+    debug_log "Expiration line: '$exp_line'"
+    
+    ts=$(date -u -d "$exp_line" +%s 2>/dev/null)
+    debug_log "Expiration timestamp: $ts"
+    
+    if [[ -n "$ts" && "$ts" =~ ^[0-9]+$ ]]; then
+        echo "ipa_cert_expiration_ts{request_id=\"$id\"} $ts" >>"$TMP"
+        debug_log "Added expiration metric: ipa_cert_expiration_ts{request_id=\"$id\"} $ts"
+        
+        # Calculate days until expiry for additional context
+        current_timestamp=$(date +%s)
+        days_until_expiry=$(( (ts - current_timestamp) / 86400 ))
+        echo "ipa_cert_days_until_expiry{request_id=\"$id\"} $days_until_expiry" >>"$TMP"
+        debug_log "Added days metric: ipa_cert_days_until_expiry{request_id=\"$id\"} $days_until_expiry"
+    else
+        debug_log "Invalid or missing timestamp for request ID: $id"
+    fi
+    
+    # Get certificate file path and check for renewal (new functionality)
+    cert_file=$(get_cert_file_path "$id")
+    if [[ -n "$cert_file" ]]; then
+        debug_log "Processing renewal check for cert file: $cert_file"
+        check_cert_renewal "$cert_file" "$id"
+    else
+        debug_log "No certificate file found for request ID: $id"
+    fi
+    
+    debug_log "--- Finished processing request ID: $id ---"
+done
+
+debug_log "=== Generated metrics content ==="
+if [[ "$DEBUG" == "1" ]]; then
+    cat "$TMP" >&2
+fi
+
+# 3. atomically publish
+debug_log "Moving temp file to output: $TMP -> $OUT"
+mv "$TMP" "$OUT"
+chown {{ export_user }}:{{ export_user }} "$OUT"
+chmod 644 "$OUT"
+
+debug_log "=== Script completed ==="
+debug_log "Output file: $OUT"

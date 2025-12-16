@@ -1,0 +1,7 @@
+[Unit]
+Description=Update IPA certificate expiration metrics
+
+[Service]
+Type=oneshot
+ExecStart={{ script_path }}
+User=root

@@ -1,0 +1,55 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file for ipa_cert_expiry_exporter
+- name: Check if node_exporter service is installed
+  ansible.builtin.systemd:
+    name: node_exporter
+  register: node_exporter_status
+  failed_when: false
+  changed_when: false
+
+- name: Fail if node_exporter is not installed or not running
+  ansible.builtin.fail:
+    msg: >
+      node_exporter is not installed or not running on the host.
+      Please ensure node_exporter is installed and running before applying this role.
+  when: node_exporter_status.status is not defined or
+        node_exporter_status.status.ActiveState != "active"
+
+- name: Install certificate expiry script
+  ansible.builtin.template:
+    src: ipa_cert_expiry.sh.j2
+    dest: "{{ script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Calculate timer interval in seconds
+  ansible.builtin.set_fact:
+    timer_interval_seconds: "{{ timer_interval_minutes | int * 60 }}"
+
+- name: Install systemd service file for ipa_cert_expiry_exporter
+  ansible.builtin.template:
+    src: ipa_cert_expiry_exporter.service.j2
+    dest: /etc/systemd/system/ipa_cert_expiry_exporter.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install systemd timer file for ipa_cert_expiry_exporter
+  ansible.builtin.template:
+    src: ipa_cert_expiry_exporter.timer.j2
+    dest: /etc/systemd/system/ipa_cert_expiry_exporter.timer
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Enable and start ipa_cert_expiry_exporter.timer
+  ansible.builtin.systemd:
+    name: ipa_cert_expiry_exporter.timer
+    enabled: yes
+    state: started

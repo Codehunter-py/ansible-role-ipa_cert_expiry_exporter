@@ -1,0 +1,10 @@
+[Unit]
+Description=Run IPA certificate expiry exporter every {{ timer_interval_minutes }} minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec={{ timer_interval_seconds }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
